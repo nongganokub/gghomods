@@ -1,0 +1,219 @@
+--[[ 
+    GG MODS - V8.0 ANTI-LAG EDITION
+    - FIX: ESP ค้าง (Auto-Remove when Player Leaves/Death)
+    - NEW: Garbage Collector System (ล้างหน่วยความจำ)
+    - FEATURES: RGB Crosshair, Item ESP, Side Health, Bottom Dist
+--]]
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+-- // CONFIG //
+_G.MenuKey = Enum.KeyCode.RightShift
+_G.EspEnabled = true
+_G.WallCheck = true
+_G.ShowBox = true
+_G.ShowTracer = true
+_G.ShowHealth = true
+_G.ShowItem = true
+_G.CrosshairEnabled = true
+_G.HitboxEnabled = true
+_G.HitboxSize = 25
+
+local Color_Visible = Color3.fromRGB(0, 255, 120)
+local Color_Invis = Color3.fromRGB(255, 50, 50)
+local DrawingObjects = {}
+local CrosshairLines = {}
+local ChromaColor = Color3.new(1, 0, 0)
+
+-- // 1. RGB & CLEANER ENGINE //
+task.spawn(function()
+    while task.wait() do 
+        ChromaColor = Color3.fromHSV((tick() * 0.5) % 1, 1, 1) 
+    end
+end)
+
+-- ฟังก์ชันล้าง ESP เมื่อผู้เล่นออก (แก้ปัญหา ESP ค้าง)
+local function RemoveESP(p)
+    if DrawingObjects[p] then
+        for _, obj in pairs(DrawingObjects[p]) do
+            obj.Visible = false
+            obj:Remove()
+        end
+        DrawingObjects[p] = nil
+    end
+end
+
+Players.PlayerRemoving:Connect(RemoveESP)
+
+-- // 2. CROSSHAIR SYSTEM //
+local function CreateCrosshair()
+    CrosshairLines.H = Drawing.new("Line")
+    CrosshairLines.V = Drawing.new("Line")
+    for _, l in pairs(CrosshairLines) do
+        l.Thickness = 1.5; l.Transparency = 1; l.Visible = false
+    end
+end
+CreateCrosshair()
+
+-- // 3. ESP FUNCTIONS //
+local function CreateDrawing(type, properties)
+    local obj = Drawing.new(type)
+    for i, v in pairs(properties) do obj[i] = v end
+    return obj
+end
+
+local function GetObjects(p)
+    if not DrawingObjects[p] then
+        DrawingObjects[p] = {
+            Box = CreateDrawing("Square", {Thickness = 1, Filled = false}),
+            Tracer = CreateDrawing("Line", {Thickness = 1}),
+            HealthBar = CreateDrawing("Line", {Thickness = 2}),
+            HealthBG = CreateDrawing("Line", {Thickness = 2, Transparency = 0.5, Color = Color3.new(0,0,0)}),
+            NameLabel = CreateDrawing("Text", {Size = 13, Center = true, Outline = true}),
+            ItemLabel = CreateDrawing("Text", {Size = 11, Center = true, Outline = true, Color = Color3.fromRGB(255, 200, 0)}),
+            DistanceLabel = CreateDrawing("Text", {Size = 11, Center = true, Outline = true})
+        }
+    end
+    return DrawingObjects[p]
+end
+
+local function ManageHitbox(char, hum)
+    local head = char:FindFirstChild("Head")
+    if not head then return end
+    if _G.HitboxEnabled and hum.Health > 0 then
+        head.Size = Vector3.new(_G.HitboxSize, _G.HitboxSize, _G.HitboxSize)
+        head.Transparency = 1; head.CanCollide = false; head.Massless = true
+        for _, v in pairs(head:GetChildren()) do
+            if v:IsA("Decal") or v:IsA("SpecialMesh") or v:IsA("MeshPart") then
+                pcall(function() v.Transparency = 1 end)
+                if v:IsA("SpecialMesh") or v:IsA("MeshPart") then v.Scale = Vector3.new(0,0,0) end
+            end
+        end
+    else
+        head.Size = Vector3.new(1.2, 1.2, 1.2); head.Transparency = 0
+        for _, v in pairs(head:GetChildren()) do
+            if v:IsA("Decal") or v:IsA("SpecialMesh") or v:IsA("MeshPart") then
+                pcall(function() v.Transparency = 0 end)
+                if v:IsA("SpecialMesh") or v:IsA("MeshPart") then v.Scale = Vector3.new(1,1,1) end
+            end
+        end
+    end
+end
+
+-- // 4. MAIN RENDER LOOP //
+RunService.RenderStepped:Connect(function()
+    local Center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+
+    -- เป้ากลางจอ
+    if _G.CrosshairEnabled then
+        for _, l in pairs(CrosshairLines) do l.Visible = true; l.Color = ChromaColor end
+        CrosshairLines.H.From = Center - Vector2.new(10, 0); CrosshairLines.H.To = Center + Vector2.new(10, 0)
+        CrosshairLines.V.From = Center - Vector2.new(0, 10); CrosshairLines.V.To = Center + Vector2.new(0, 10)
+    else
+        for _, l in pairs(CrosshairLines) do l.Visible = false end
+    end
+
+    -- ESP Loop
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        
+        local char = p.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local obj = GetObjects(p)
+
+        -- เช็คสถานะตัวละคร (ถ้าตายหรือไม่มีตัวตน ให้ซ่อน ESP ทันที)
+        if _G.EspEnabled and char and hum and hrp and hum.Health > 0 then
+            local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+            ManageHitbox(char, hum)
+
+            if onScreen then
+                local visible = true
+                if _G.WallCheck then
+                    local res = Camera:GetPartsObscuringTarget({Camera.CFrame.Position, hrp.Position}, {LocalPlayer.Character, char})
+                    visible = (#res == 0)
+                end
+                local col = visible and Color_Visible or Color_Invis
+                local dist = (Camera.CFrame.Position - hrp.Position).Magnitude
+                local f = 1 / (dist * math.tan(math.rad(Camera.FieldOfView/2))) * 1000
+                local w, h = 4.2 * f, 5.8 * f
+
+                obj.Box.Visible = _G.ShowBox
+                obj.Box.Size = Vector2.new(w, h); obj.Box.Position = Vector2.new(pos.X - w/2, pos.Y - h/2); obj.Box.Color = col
+
+                if _G.ShowHealth then
+                    obj.HealthBar.Visible = true; obj.HealthBG.Visible = true
+                    local hpP = hum.Health / hum.MaxHealth
+                    obj.HealthBG.From = Vector2.new(pos.X - w/2 - 4, pos.Y + h/2); obj.HealthBG.To = Vector2.new(pos.X - w/2 - 4, pos.Y - h/2)
+                    obj.HealthBar.From = Vector2.new(pos.X - w/2 - 4, pos.Y + h/2); obj.HealthBar.To = Vector2.new(pos.X - w/2 - 4, (pos.Y + h/2) - (h * hpP))
+                    obj.HealthBar.Color = Color3.fromHSV(hpP * 0.3, 1, 1)
+                else obj.HealthBar.Visible = false; obj.HealthBG.Visible = false end
+
+                obj.NameLabel.Visible = true; obj.NameLabel.Position = Vector2.new(pos.X, pos.Y - h/2 - 25); obj.NameLabel.Text = p.DisplayName; obj.NameLabel.Color = col
+                
+                if _G.ShowItem then
+                    local tool = char:FindFirstChildOfClass("Tool")
+                    obj.ItemLabel.Visible = true; obj.ItemLabel.Position = Vector2.new(pos.X, pos.Y - h/2 - 12); obj.ItemLabel.Text = tool and tool.Name or "Hands"
+                else obj.ItemLabel.Visible = false end
+
+                obj.DistanceLabel.Visible = true; obj.DistanceLabel.Position = Vector2.new(pos.X, pos.Y + h/2 + 5); obj.DistanceLabel.Text = "[" .. math.floor(dist) .. "m]"; obj.DistanceLabel.Color = Color3.new(1,1,1)
+                obj.Tracer.Visible = _G.ShowTracer; obj.Tracer.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y); obj.Tracer.To = Vector2.new(pos.X, pos.Y + h/2); obj.Tracer.Color = col
+            else
+                for _, v in pairs(obj) do v.Visible = false end
+            end
+        else
+            -- ล้างการแสดงผลเมื่อเงื่อนไขไม่ครบ (ตาย หรือ ปิด ESP)
+            for _, v in pairs(obj) do v.Visible = false end
+        end
+    end
+end)
+
+-- // 5. UI: GG MODS PRO V8 //
+local ScreenGui = Instance.new("ScreenGui", game:GetService("CoreGui"))
+local Main = Instance.new("Frame", ScreenGui); Main.Size = UDim2.new(0, 225, 0, 440); Main.Position = UDim2.new(0.05, 0, 0.2, 0); Main.BackgroundColor3 = Color3.fromRGB(10, 10, 10); Main.Active = true; Main.Draggable = true; Instance.new("UICorner", Main)
+local Header = Instance.new("Frame", Main); Header.Size = UDim2.new(1, 0, 0, 40); Header.BackgroundColor3 = Color3.fromRGB(180, 0, 0); Instance.new("UICorner", Header)
+local Title = Instance.new("TextLabel", Header); Title.Size = UDim2.new(1, 0, 1, 0); Title.Text = "GG MODS V8 ANTI-LAG"; Title.TextColor3 = Color3.new(1,1,1); Title.Font = "GothamBold"; Title.TextSize = 14; Title.BackgroundTransparency = 1
+
+local function AddSwitch(text, default, pos, callback)
+    local Frame = Instance.new("Frame", Main); Frame.Size = UDim2.new(0.9, 0, 0, 30); Frame.Position = UDim2.new(0.05, 0, 0, pos); Frame.BackgroundTransparency = 1
+    local Label = Instance.new("TextLabel", Frame); Label.Size = UDim2.new(0.7, 0, 1, 0); Label.Text = text; Label.TextColor3 = Color3.new(1,1,1); Label.Font = "GothamMedium"; Label.TextSize = 11; Label.TextXAlignment = "Left"; Label.BackgroundTransparency = 1
+    local SwBG = Instance.new("TextButton", Frame); SwBG.Size = UDim2.new(0, 34, 0, 16); SwBG.Position = UDim2.new(1, -34, 0.5, -8); SwBG.BackgroundColor3 = default and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(45, 45, 45); SwBG.Text = ""; Instance.new("UICorner", SwBG).CornerRadius = UDim.new(1, 0)
+    local Dot = Instance.new("Frame", SwBG); Dot.Size = UDim2.new(0, 12, 0, 12); Dot.Position = default and UDim2.new(1, -14, 0.5, -6) or UDim2.new(0, 2, 0.5, -6); Dot.BackgroundColor3 = Color3.new(1,1,1); Instance.new("UICorner", Dot).CornerRadius = UDim.new(1, 0)
+    local s = default
+    SwBG.MouseButton1Click:Connect(function()
+        s = not s; callback(s)
+        TweenService:Create(SwBG, TweenInfo.new(0.2), {BackgroundColor3 = s and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(45, 45, 45)}):Play()
+        TweenService:Create(Dot, TweenInfo.new(0.2), {Position = s and UDim2.new(1, -14, 0.5, -6) or UDim2.new(0, 2, 0.5, -6)}):Play()
+    end)
+end
+
+AddSwitch("ESP MASTER", _G.EspEnabled, 55, function(v) _G.EspEnabled = v end)
+AddSwitch("RGB CROSSHAIR", _G.CrosshairEnabled, 90, function(v) _G.CrosshairEnabled = v end)
+AddSwitch("WALL CHECK", _G.WallCheck, 125, function(v) _G.WallCheck = v end)
+AddSwitch("ITEM ESP", _G.ShowItem, 160, function(v) _G.ShowItem = v end)
+AddSwitch("HEALTH SIDEBAR", _G.ShowHealth, 195, function(v) _G.ShowHealth = v end)
+AddSwitch("TRACER LINE", _G.ShowTracer, 230, function(v) _G.ShowTracer = v end)
+AddSwitch("HITBOX SYSTEM", _G.HitboxEnabled, 265, function(v) _G.HitboxEnabled = v end)
+
+local SLbl = Instance.new("TextLabel", Main); SLbl.Size = UDim2.new(1, 0, 0, 20); SLbl.Position = UDim2.new(0, 0, 0, 305); SLbl.Text = "HITBOX RADIUS: ".._G.HitboxSize; SLbl.TextColor3 = Color3.new(1,1,1); SLbl.Font = "GothamBold"; SLbl.TextSize = 11; SLbl.BackgroundTransparency = 1
+local SBar = Instance.new("Frame", Main); SBar.Size = UDim2.new(0.8, 0, 0, 4); SBar.Position = UDim2.new(0.1, 0, 0, 335); SBar.BackgroundColor3 = Color3.fromRGB(45, 45, 45); Instance.new("UICorner", SBar)
+local SDot = Instance.new("TextButton", SBar); SDot.Size = UDim2.new(0, 12, 0, 12); SDot.Position = UDim2.new(_G.HitboxSize/100, -6, 0.5, -6); SDot.BackgroundColor3 = Color3.fromRGB(200, 0, 0); SDot.Text = ""; Instance.new("UICorner", SDot).CornerRadius = UDim.new(1, 0)
+
+local drag = false
+SDot.MouseButton1Down:Connect(function() drag = true end)
+RunService.RenderStepped:Connect(function()
+    if drag then
+        local mPos = UserInputService:GetMouseLocation().X
+        local rel = math.clamp((mPos - SBar.AbsolutePosition.X) / SBar.AbsoluteSize.X, 0, 1)
+        SDot.Position = UDim2.new(rel, -6, 0.5, -6); _G.HitboxSize = math.floor(rel * 100); SLbl.Text = "HITBOX RADIUS: ".._G.HitboxSize
+    end
+end)
+UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end end)
+UserInputService.InputBegan:Connect(function(i, p) if not p and i.KeyCode == _G.MenuKey then Main.Visible = not Main.Visible end end)
+
+print("✅ GG MODS V8.0: FIXED ESP FREEZE & AUTO-CLEAN!")
